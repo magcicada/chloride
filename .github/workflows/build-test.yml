@@ -23,17 +23,42 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # FORGEGRADLE 6 REQUIRES GRADLE 8.x (NOT 9); PROVISION 8.8 EXPLICITLY
+      # ForgeGradle 7 requires Gradle 9.3.0+. Keep the Java 17 toolchain.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.0'
 
       - name: Build with Gradle
-        run: gradle build --console=plain
+        run: |
+          gradle --version
+          gradle clean build --console=plain
+
+      - name: Verify production Mixin fields
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import pathlib, subprocess
+          jars = [p for p in pathlib.Path('build/libs').glob('*.jar')
+                  if not p.name.endswith(('-dev.jar', '-dev-renamed.jar', '-sources.jar'))]
+          assert len(jars) == 1, f'Expected one production jar, found: {jars}'
+          result = subprocess.run([
+              'javap', '-private', '-classpath', str(jars[0]),
+              'me.srrapero720.chloride.mixins.impl.OverlayMixin'
+          ], check=True, text=True, capture_output=True)
+          print(result.stdout)
+          for field in ('fps', 'options', 'metricsRecorder', 'level', 'gpuUtilization'):
+              assert not any(line.strip().endswith(' ' + field + ';')
+                             for line in result.stdout.splitlines()), f'Unmapped Shadow field: {field}'
+          PYTHON
 
       - name: Upload mod jar
         uses: actions/upload-artifact@v4
         with:
           name: mod-jar
-          path: build/libs/*.jar
+          path: |
+            build/libs/*.jar
+            !build/libs/*-dev.jar
+            !build/libs/*-dev-renamed.jar
+            !build/libs/*-sources.jar
+          if-no-files-found: error
