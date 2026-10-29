@@ -38,6 +38,6 @@ issueTrackerURL="https://github.com/$github/issues"
 [[dependencies.$modid]]
     modId="jei"
     mandatory=false
-    versionRange="[15.74.0.233,)"
+    versionRange="[15.74.0.232,)"
     ordering="AFTER"
     side="CLIENT"
