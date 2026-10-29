@@ -34,3 +34,10 @@ issueTrackerURL="https://github.com/$github/issues"
     versionRange="$sodiumrange"
     ordering="AFTER"
     side="CLIENT"
+
+[[dependencies.$modid]]
+    modId="jei"
+    mandatory=false
+    versionRange="[15.74.0.233,)"
+    ordering="AFTER"
+    side="CLIENT"
