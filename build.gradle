@@ -128,7 +128,7 @@ dependencies {
 
     // MIXIN ANNOTATION PROCESSOR (GENERATES THE REFMAP). NO MIXINGRADLE ON FG7, SO THE SRG REMAP OF THE
     // REFMAP IS WIRED BY HAND FURTHER DOWN
-    annotationProcessor "net.fabricmc:sponge-mixin:$mixin_fabric_version+mixin.$mixin_version"
+    annotationProcessor "org.spongepowered:mixin:$mixin_version:processor"
     compileOnly(annotationProcessor("io.github.llamalad7:mixinextras-common:$mixinextra_version"))
 
     // CONFIG LIBRARY (JAR-IN-JAR; WATERCONFIG REGISTERS CODECS/FORMATS VIA ServiceLoader)
@@ -174,9 +174,12 @@ tasks.matching { it.name == 'runClient' || it.name == 'runServer' }.configureEac
 // FG7 NATIVE MIXIN REFMAP SUPPORT (REPLACES MIXINGRADLE): CONFIGURES THE SPONGE-MIXIN AP AND REMAPS THE
 // GENERATED REFMAP TO SRG SO THE MIXINS APPLY IN PRODUCTION
 renamer.enableMixinRefmaps {
+    config "$modid.$mixin_file_suffix"
     source(sourceSets.main) {
         refMap = "$modid.$mixin_refmap_suffix"
     }
+    // Explicit sources disable Renamer's automatic default jar wiring.
+    jar(tasks.named('jar', Jar))
 }
 
 // ALWAYS RE-EXPAND: GRADLE DOES NOT TRACK EVERY PROJECT PROPERTY AS A TASK INPUT
@@ -209,16 +212,22 @@ jar {
 }
 
 renamer.classes('reobfJar', tasks.named('jar', Jar)) {
-    map.from minecraft.dependency.toSrgFile
-    archiveClassifier = ''
+    // Includes the AP-generated mappings for @Shadow / @Overwrite members.
+    mappings renamer.mixin.generatedMappings
     // REOBFUSCATE THE SHIPPED META-INF/accesstransformer.cfg FROM MOJMAP TO SRG FOR THE FORGE 1.20.1 RUNTIME
     accessTransformers = true
+}
+
+// Configure after registration: Renamer's from(jar) also sets naming defaults.
+tasks.named('reobfJar') {
+    archiveClassifier = ''
+    output = layout.buildDirectory.file("libs/${modid}-${modloader}-mc${mcversion}-v${modversion}.jar")
 }
 
 publishMods {
     displayName = "$modid-$modversion-${modloader.toUpperCase()}-$mcversion"
     type = ReleaseType.valueOf(versiontype.toUpperCase())
-    file = tasks.named('reobfJar').flatMap { it.archiveFile }
+    file = tasks.named('reobfJar').flatMap { it.output }
     changelog = getChangelogText()
     modLoaders.add(modloader.toLowerCase())
     maxRetries = 10
@@ -253,3 +262,34 @@ def getChangelogText() {
     }
     return result
 }
+
+// A successful build must include a usable production artifact, not just the dev jar.
+def productionJar = tasks.named('reobfJar').flatMap { it.output }
+tasks.register('verifyProductionJar') {
+    dependsOn tasks.named('reobfJar')
+    inputs.file(productionJar)
+    doLast {
+        def artifact = productionJar.get().asFile
+        def zip = new java.util.zip.ZipFile(artifact)
+        try {
+            def refmapName = "${modid}.${mixin_refmap_suffix}"
+            def entry = zip.getEntry(refmapName)
+            if (entry == null) {
+                throw new GradleException("Production jar is missing ${refmapName}: ${artifact}")
+            }
+            def refmap = new groovy.json.JsonSlurper().parseText(zip.getInputStream(entry).getText('UTF-8'))
+            if (!(refmap.mappings instanceof Map) || refmap.mappings.isEmpty()) {
+                throw new GradleException("Production jar has an empty Mixin refmap: ${artifact}")
+            }
+            def configEntry = zip.getEntry("${modid}.${mixin_file_suffix}")
+            if (configEntry == null) throw new GradleException('Missing Mixin config')
+            def config = new groovy.json.JsonSlurper().parseText(zip.getInputStream(configEntry).getText('UTF-8'))
+            if (config.refmap != refmapName) throw new GradleException('Mixin config / refmap name mismatch')
+            logger.lifecycle("Verified production jar: ${artifact.name}")
+        } finally {
+            zip.close()
+        }
+    }
+}
+tasks.named('assemble') { dependsOn tasks.named('reobfJar') }
+tasks.named('check') { dependsOn tasks.named('verifyProductionJar') }
